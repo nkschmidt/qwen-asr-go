@@ -1,0 +1,8 @@
+.git
+build
+.native
+bin
+models
+**/*.wav
+**/*.safetensors
+**/*.npy

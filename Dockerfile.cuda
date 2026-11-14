@@ -1,0 +1,43 @@
+# Prepared for Linux/NVIDIA. Not built or tested on a CUDA host yet.
+FROM golang:1.24.1-bookworm AS go-sdk
+FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04 AS build
+ARG MLX_VERSION=v0.32.4
+ARG CUDA_ARCHITECTURES="80;86;89;90"
+ARG BUILD_JOBS=4
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake ninja-build git pkg-config ca-certificates \
+    libopenblas-dev liblapacke-dev nlohmann-json3-dev python3 \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=go-sdk /usr/local/go /usr/local/go
+ENV PATH=/usr/local/go/bin:/usr/local/cuda/bin:${PATH}
+RUN git clone --depth 1 --branch "${MLX_VERSION}" https://github.com/ml-explore/mlx.git /src/mlx \
+    && cmake -S /src/mlx -B /src/mlx-build -G Ninja \
+      -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/opt/mlx \
+      -DCMAKE_INSTALL_LIBDIR=lib -DBUILD_SHARED_LIBS=ON \
+      -DMLX_BUILD_CUDA=ON -DMLX_BUILD_METAL=OFF -DMLX_BUILD_CPU=ON \
+      -DMLX_BUILD_PYTHON_BINDINGS=OFF -DMLX_BUILD_TESTS=OFF \
+      -DMLX_BUILD_EXAMPLES=OFF -DMLX_BUILD_BENCHMARKS=OFF \
+      -DCMAKE_CUDA_ARCHITECTURES="${CUDA_ARCHITECTURES}" \
+    && cmake --build /src/mlx-build --parallel "${BUILD_JOBS}" \
+    && cmake --install /src/mlx-build
+WORKDIR /src/qwen-asr-go
+COPY . .
+ENV MLX_ROOT=/opt/mlx ASR_PREFIX=/opt/qwen-asr ASR_BACKEND=cuda
+RUN BUILD_JOBS="${BUILD_JOBS}" ./scripts/build-native.sh
+ENV CGO_ENABLED=1 PKG_CONFIG_PATH=/opt/qwen-asr/lib/pkgconfig
+RUN go build -trimpath -o /out/transcribe ./cmd/transcribe
+
+FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04 AS runtime
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libopenblas0-pthread liblapacke libstdc++6 libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=build /opt/mlx/lib/ /opt/mlx/lib/
+COPY --from=build /opt/qwen-asr/lib/ /opt/qwen-asr/lib/
+COPY --from=build /out/transcribe /usr/local/bin/transcribe
+COPY --from=build /src/qwen-asr-go/licenses/ /usr/share/licenses/qwen-asr-go/
+COPY --from=build /src/qwen-asr-go/LICENSE /usr/share/licenses/qwen-asr-go/LICENSE
+COPY --from=build /src/qwen-asr-go/native/vendor/qwen-asr/LICENSE /usr/share/licenses/qwen-asr-go/qwen-asr-tokenizer.txt
+ENV LD_LIBRARY_PATH=/opt/qwen-asr/lib:/opt/mlx/lib:${LD_LIBRARY_PATH}
+ENTRYPOINT ["/usr/local/bin/transcribe"]
+CMD ["-help"]

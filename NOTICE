@@ -1,0 +1,8 @@
+The native model graph is adapted from mlx-audio 0.6.5 Qwen3ASRModel
+(MIT, copyright Prince Canuma; licenses/mlx-audio.txt).
+The tokenizer is from antirez/qwen-asr at commit
+924694251d9e0f18e5d86bbd06aa3ab5f870002d
+(MIT, copyright Salvatore Sanfilippo; native/vendor/qwen-asr/LICENSE).
+MLX 0.32.4 is a separately installed runtime
+(MIT, copyright Apple Inc.; licenses/mlx.txt).
+Model weights are not included; their license is separate.

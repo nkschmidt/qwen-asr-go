@@ -1,0 +1,12 @@
+/build/
+/.native/
+/bin/
+/models/
+*.wav
+*.safetensors
+*.npy
+*.o
+*.a
+*.dylib
+*.so*
+.DS_Store

@@ -1,0 +1,9 @@
+prefix=@CMAKE_INSTALL_PREFIX@
+libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+
+Name: qwen-asr-mlx
+Description: Qwen3-ASR native MLX inference for Go
+Version: @PROJECT_VERSION@
+Libs: -L${libdir} -lqwen_asr_mlx -Wl,-rpath,${libdir}
+Cflags: -I${includedir}
