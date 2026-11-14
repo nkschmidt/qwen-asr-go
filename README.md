@@ -42,7 +42,7 @@ The native inference runtime does not use its Python bindings.
 Install the Go module in your application:
 
 ```sh
-go get github.com/nkschmidt/qwen-asr-go@v0.1.1
+go get github.com/nkschmidt/qwen-asr-go@v0.1.2
 ```
 
 `go get` downloads Go source. It does **not** install MLX or build the native
@@ -61,8 +61,12 @@ The SDK directory must contain `include/` and `lib/`. On macOS, a path such as
 `/path/to/site-packages/mlx` can be used as `MLX_ROOT`.
 
 The default native install prefix is `.native`. Set `ASR_PREFIX` to use a
-shared SDK location. Both that installation and the MLX libraries must remain
-available at runtime; the native build records library search paths.
+shared SDK location. On macOS, installation bundles `libmlx.dylib` and `mlx.metallib` next to
+`libqwen_asr_mlx.dylib` by default and uses `@loader_path`, so inference does not
+load its MLX runtime from the original SDK or Python environment. Keep the native
+installation available at runtime. Set `QWEN_ASR_BUNDLE_MLX_RUNTIME=OFF` in CMake
+only when managing MLX shared libraries separately. Linux uses the configured
+MLX installation and the Docker runtime copies both library directories.
 
 Build separately for each OS and architecture. A macOS binary or native
 installation cannot be reused in Linux.

@@ -10,3 +10,5 @@
 *.dylib
 *.so*
 .DS_Store
+
+/.mlx-sdk/
