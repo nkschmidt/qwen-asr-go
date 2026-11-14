@@ -1,93 +1,149 @@
 # qwen-asr-go
 
-Go-библиотека Qwen3-ASR-0.6B: Go → cgo → C++ MLX → Metal или CUDA.
-Без Python, HTTP и отдельного inference worker во время распознавания.
-Модель загружается один раз. По умолчанию используется async lookahead на один токен.
+Native Go bindings for **Qwen3-ASR-0.6B**, powered by the MLX C++ runtime.
 
-**Статус:** macOS/Metal проверяется локально. Linux/CUDA и Dockerfile подготовлены,
-но не собирались и не запускались на NVIDIA. Совместимость всех CUDA-операций,
-точность и скорость на Linux пока не подтверждены. CPU — явный дополнительный режим,
-его скорость не является целью этой версии. Поддержан один checkpoint-формат:
-MLX Qwen3-ASR-0.6B, affine 4 bit, group size 64. Веса не включены.
-
-## Как подключать в Go
-
-Это отдельный Go module, а не микросервис. У него нет зависимостей от Mixcall.
-Нужны и Go-код, и установленная нативная библиотека с MLX:
-
-```sh
-# Для приватного репозитория: доступ GitHub должен быть настроен в Git.
-export GOPRIVATE="${GOPRIVATE:+$GOPRIVATE,}github.com/nkschmidt/*"
-go get github.com/nkschmidt/qwen-asr-go@v0.1.0
+```text
+Go → cgo → C++ / MLX → Metal or CUDA
 ```
 
-Если GOPRIVATE уже настроен, добавьте этот шаблон к существующим значениям.
-Локальная разработка в потребляющем приложении:
+The model stays loaded between calls. Inference runs inside the Go process,
+without a Python interpreter, an HTTP API, or a separate worker process.
+Asynchronous decoding with one-token lookahead is enabled by default.
+
+## Status
+
+| Backend | Status |
+| --- | --- |
+| macOS / Apple Silicon / Metal | Built and smoke-tested locally |
+| Linux / NVIDIA / CUDA | Build configuration prepared; not built or tested on NVIDIA |
+| Linux / CUDA Docker image | Dockerfile provided; not built or tested |
+| CPU | Explicit build/runtime option; performance is not validated |
+
+Only MLX-format **Qwen3-ASR-0.6B, affine 4-bit, group size 64** checkpoints
+are supported. Model weights are not included.
+
+CUDA operator compatibility, transcription quality, performance, and resource
+handling still need validation on a Linux/NVIDIA host.
+
+## Requirements
+
+- Go 1.24.1 or later with cgo enabled.
+- A C++20 compiler, CMake 3.25 or later, and `pkg-config`.
+- MLX C++ SDK **0.32.4**.
+- nlohmann-json 3.11 or later.
+- For Metal: Apple Silicon and Xcode Command Line Tools.
+- For CUDA: Linux, a supported NVIDIA driver, CUDA Toolkit, cuDNN, and BLAS/LAPACK.
+
+The MLX headers and libraries can come from an installed `mlx` package.
+The native inference runtime does not use its Python bindings.
+
+## Installation
+
+Install the Go module in your application:
 
 ```sh
-go mod edit -replace github.com/nkschmidt/qwen-asr-go=../qwen-asr-go
+go get github.com/nkschmidt/qwen-asr-go@v0.1.1
 ```
 
-`go get` загружает исходники Go; он не устанавливает MLX/CUDA и не собирает CMake.
-Перед сборкой приложения выполните установку native ниже и задайте PKG_CONFIG_PATH.
-Это cgo-приложение: `CGO_ENABLED=0` не включает распознавание. В таком режиме
-`New` возвращает `ErrNativeUnavailable`; чистые Go-тесты доступны без MLX.
+`go get` downloads Go source. It does **not** install MLX or build the native
+library. Build and install that library first, then expose its `.pc` file when
+building your application:
+
+```sh
+git clone https://github.com/nkschmidt/qwen-asr-go.git
+cd qwen-asr-go
+MLX_ROOT=/absolute/path/to/mlx-sdk make native
+export PKG_CONFIG_PATH="$PWD/.native/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+make build
+```
+
+The SDK directory must contain `include/` and `lib/`. On macOS, a path such as
+`/path/to/site-packages/mlx` can be used as `MLX_ROOT`.
+
+The default native install prefix is `.native`. Set `ASR_PREFIX` to use a
+shared SDK location. Both that installation and the MLX libraries must remain
+available at runtime; the native build records library search paths.
+
+Build separately for each OS and architecture. A macOS binary or native
+installation cannot be reused in Linux.
+
+## Go API
+
+Create a recognizer when the application starts and reuse it across requests:
 
 ```go
-import (
-    "context"
-    asr "github.com/nkschmidt/qwen-asr-go"
-)
+import asr "github.com/nkschmidt/qwen-asr-go"
 
 recognizer, err := asr.New(ctx, asr.Config{
-    ModelPath: "/models/qwen3-asr-0.6b-4bit",
-    Device: asr.Auto, // Metal на Mac; CUDA в CUDA-сборке. Без скрытого CPU fallback.
+    ModelPath:  "/models/qwen3-asr-0.6b-4bit",
+    Device:     asr.Auto,
     DecodeMode: asr.Async,
 })
-if err != nil { return err }
+if err != nil {
+    return err
+}
 defer recognizer.Close()
 
-result, err := recognizer.Recognize(context.Background(), pcm16, "de")
+result, err := recognizer.Recognize(ctx, pcm16, "de")
 // result.Text, result.Language, result.Device, result.ProcessingTime
 ```
 
-PCM16LE mono 16000 Hz, 25 мс–28 с; короткие фразы дополняются до одной секунды.
-Язык — ISO code (de, ru, en, …), `auto` или пустая строка. Языки — languages.go.
-Неподдерживаемый язык и неверный формат отклоняются до вызова модели.
+`Recognize` accepts **PCM16LE, mono, 16 kHz**, from 25 milliseconds to
+28 seconds. Inputs shorter than one second are zero-padded. Supply an ISO
+language code such as `de`, `ru`, or `en`; use `auto` or an empty string for
+automatic language detection. Supported codes are listed in `languages.go`.
 
-Вызовы безопасны из нескольких goroutine и выполняются последовательно на закреплённом
-OS thread. Все экземпляры внутри Go-модуля также разделяют блокировку MLX/tokenizer.
-Для MVP обычно нужен один экземпляр на ASR-процесс, не экземпляр на звонок.
-Отмена context возвращает управление вызывающему коду; native кооперативно проверяет
-флаг между стадиями/токенами. Запущенное GPU-ядро не прерывается. Перед освобождением
-ресурсов завершается вся работа GPU, включая дополнительный шаг после EOS.
-`Close` идемпотентен, отменяет активный запрос и ждёт очистки. Отмена загрузки модели
-может вернуть ошибку раньше, чем завершится фоновая загрузка и её очистка.
+`Result` includes the text, language code, model identifier, selected device,
+total processing time, and decoding time after prefill.
 
-Это библиотека распознавания готовых фраз. SIP, VAD, аудиопотоки и брокер остаются в ASR/Gateway.
+### Device and decoding options
 
-## macOS / Metal
+- `asr.Auto`: selects the backend configured in the native build.
+- `asr.Metal`: requires a Metal-enabled build and an available Metal GPU.
+- `asr.CUDA`: requires a CUDA-enabled build and an available CUDA GPU.
+- `asr.CPU`: explicitly selects CPU execution with a CPU-enabled MLX runtime.
+- `asr.Async`: asynchronous decoding with one-token lookahead; the default.
+- `asr.Sync`: synchronous decoding for comparison.
 
-Нужны Apple Silicon, Xcode Command Line Tools, Go 1.24.1+, CMake 3.25+,
-pkg-config, nlohmann-json 3.11+ и MLX C++ SDK **0.32.4**.
-Можно использовать include/lib из установленного пакета mlx; Python runtime не нужен.
+An unavailable GPU does not silently fall back to CPU. In a CPU-only native
+build, `Auto` selects that explicitly configured CPU backend.
+
+### Concurrency and lifecycle
+
+A recognizer is safe to call from multiple goroutines. Requests execute
+sequentially on a dedicated OS thread. All recognizers in this module also
+share a native execution lock protecting MLX defaults and tokenizer state.
+Multiple recognizers do not provide parallel inference in this version.
+
+Context cancellation returns control to the caller. Native code checks a
+cancellation flag between stages and tokens; a running GPU kernel is not
+preempted. Pending GPU work, including extra lookahead after EOS, is drained
+before request resources are released.
+
+`Close` is idempotent, cancels active work, waits for cleanup, and releases the
+model. It can wait for a running load or GPU kernel. Canceling `New` can return
+before native loading finishes; cleanup then completes in the background.
+
+This library recognizes complete audio utterances. Transport, voice activity
+detection, and application-specific orchestration belong to the caller.
+
+## Command-line example
 
 ```sh
-MLX_ROOT=/absolute/path/to/site-packages/mlx make native
-export PKG_CONFIG_PATH="$PWD/.native/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
-make build
-./bin/transcribe -model /path/to/model -wav /path/to/speech.wav -language de
+./bin/transcribe \
+  -model /path/to/model \
+  -wav /path/to/speech.wav \
+  -language de \
+  -device auto \
+  -decode async
 ```
 
-Нативная библиотека устанавливается в `.native` или `ASR_PREFIX`. Этот каталог и
-каталог библиотек MLX должны сохраняться при запуске приложения (rpath записывается
-при сборке). Для общей установки задайте `ASR_PREFIX=/your/sdk/prefix`; root не требуется.
-Не используйте macOS `.native` или собранный бинарник в Linux: там нужна отдельная сборка.
+The CLI expects a PCM16 mono 16 kHz WAV and prints a JSON result. Applications
+can import the root package directly without using the CLI.
 
-## Linux / CUDA — подготовлено, не проверено
+## Linux / CUDA build — unverified
 
-Нужен Linux/NVIDIA с совместимым драйвером, CUDA Toolkit, cuDNN, C++20,
-BLAS/LAPACK, CMake, pkg-config и nlohmann-json. Сначала MLX C++ 0.32.4:
+Build MLX C++ 0.32.4 with CUDA support, then build the native library:
 
 ```sh
 git clone --depth 1 --branch v0.32.4 https://github.com/ml-explore/mlx.git
@@ -99,66 +155,75 @@ cmake -S mlx -B mlx-build -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_CUDA_ARCHITECTURES=80
 cmake --build mlx-build --parallel 4
 cmake --install mlx-build
+
+# Run from the qwen-asr-go checkout.
 MLX_ROOT=/opt/mlx ASR_BACKEND=cuda ASR_PREFIX=/opt/qwen-asr ./scripts/build-native.sh
 export PKG_CONFIG_PATH=/opt/qwen-asr/lib/pkgconfig
 make build ASR_PREFIX=/opt/qwen-asr
 ```
 
-`80` — пример архитектуры, задайте нужную для своей NVIDIA.
-Указанные `/opt` prefixes должны быть доступны на запись либо заменены своими.
-`Device=CUDA` проверяет наличие CUDA backend; неподдерживаемый backend не подменяется.
-`ASR_BACKEND=cpu` собирает явный CPU-вариант с MLX, собранным с CPU поддержкой.
+`80` is an example CUDA architecture; choose the value for your GPU. Installation
+prefixes must be writable or replaced with suitable paths.
 
-## Docker — подготовлено, не проверено
+For an explicit CPU-only native build, set `ASR_BACKEND=cpu` and use an MLX SDK
+built with CPU support.
 
-Dockerfile.cuda собирает MLX без Python bindings, native shared library и smoke CLI.
-Python может быть установлен в build-stage для инструментов сборки; runtime его не запускает.
-Нужен NVIDIA Container Toolkit на хосте. Контейнер — CLI для проверки, не HTTP-сервис.
+## Docker / CUDA — unverified
+
+`Dockerfile.cuda` builds MLX without Python bindings, the native shared
+library, and the example CLI. Python may be installed as a build tool in the
+build stage; native inference does not invoke it.
+
+The host needs the NVIDIA driver and NVIDIA Container Toolkit:
 
 ```sh
 docker build --platform linux/amd64 -f Dockerfile.cuda -t qwen-asr-go:cuda .
 docker run --rm --gpus all \
   -v /absolute/path/model:/models/qwen:ro \
   -v /absolute/path/audio:/audio:ro \
-  qwen-asr-go:cuda -model /models/qwen -wav /audio/speech.wav -language de -device cuda
+  qwen-asr-go:cuda \
+  -model /models/qwen -wav /audio/speech.wav -language de -device cuda
 ```
 
-Параметры сборки: `BUILD_JOBS`, `CUDA_ARCHITECTURES` (по умолчанию 80;86;89;90),
-`MLX_VERSION`. Для потребляющего Go-сервиса используйте ту же установку MLX/native
-в build-stage и перенесите `/opt/mlx/lib`, `/opt/qwen-asr/lib` в runtime вместе с бинарником.
-Веса передаются volume; ни веса, ни записи в образ/репозиторий не включаются.
+Build arguments: `BUILD_JOBS`, `CUDA_ARCHITECTURES` (default: `80;86;89;90`),
+and `MLX_VERSION`. The image runs a CLI, not a network service.
 
-## Подключение к Mixcall
+When embedding the library in another Go application, use the same MLX/native
+installation in its build stage and copy `/opt/mlx/lib` and `/opt/qwen-asr/lib`
+into its runtime image alongside the application binary. Model weights are
+mounted separately.
 
-Интерфейс принадлежит application Mixcall. В infrastructure пишется маленький адаптер:
-
-```go
-type MLX struct { recognizer *asr.Recognizer }
-
-func (m *MLX) Recognize(ctx context.Context, pcm []byte, language string) (ports.Recognition, error) {
-    result, err := m.recognizer.Recognize(ctx, pcm, language)
-    if err != nil { return ports.Recognition{}, err }
-    return ports.Recognition{Text: result.Text, Language: result.Language, Engine: result.Engine}, nil
-}
-```
-
-`asr.Result` и `ports.Recognition` — разные Go-типы, поэтому нужен этот адаптер.
-В `cmd/asr/main.go` создаются `asr.Recognizer` и адаптер; в application передаётся
-только `ports.Recognizer`. Оригинальный брокер и Gateway менять не требуется.
-Рабочий Mixcall этим репозиторием автоматически не переключается.
-
-## Проверки
+## Development and tests
 
 ```sh
-make test-go       # Go contracts without native dependencies
-make test          # race tests, requires installed native library
+make test-go  # Pure Go lifecycle contracts; no native runtime required.
+make test     # Race tests; requires the installed native library.
 make vet
 ```
 
-Проверяются сериализация, отмена активного/ожидающего запроса, владение PCM,
-повторное закрытие и очистка отменённой загрузки. Отдельные model smoke-проверки
-запускаются CLI на локальных данных. Linux/CUDA сборка и runtime в этой версии
-намеренно не проверялись. Требуются проверка операций CUDA, сравнение текстов,
-повторные вызовы, отмена и измерение задержек/памяти на реальной NVIDIA.
+`CGO_ENABLED=0` does not enable inference: `New` returns
+`ErrNativeUnavailable`. This mode supports pure Go contract tests.
 
-Источники, версии и лицензии — NOTICE, LICENSE и licenses/.
+Contract tests cover serialization, request cancellation, PCM buffer ownership,
+idempotent close, and cleanup after canceled loading. Native model smoke tests
+are opt-in and do not download weights or recordings:
+
+```sh
+QWEN_ASR_TEST_MODEL=/path/to/model \
+QWEN_ASR_TEST_PCM=/path/to/audio.pcm \
+QWEN_ASR_TEST_LANGUAGE=de \
+PKG_CONFIG_PATH="$PWD/.native/lib/pkgconfig:${PKG_CONFIG_PATH:-}" \
+  go test -race -run TestNativeModelLifecycle -v .
+```
+
+For local development in a consuming application:
+
+```sh
+go mod edit -replace github.com/nkschmidt/qwen-asr-go=../qwen-asr-go
+```
+
+## License and attribution
+
+MIT. See `LICENSE` and `NOTICE`. Third-party notices are included under
+`licenses/` and `native/vendor/qwen-asr/`. Model weights have their own license
+and are not distributed with this repository.
