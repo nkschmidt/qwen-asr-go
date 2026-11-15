@@ -58,14 +58,11 @@ func (m *mlxModel) recognize(ctx context.Context, pcm []byte, code, name string)
 	for i := 0; i < len(pcm)/2; i++ {
 		audio[i] = float32(int16(binary.LittleEndian.Uint16(pcm[2*i:]))) / 32768
 	}
-	prompt := "Transcribe the audio verbatim in its original language. Do not translate. "
-	if name != "" {
-		prompt = "Transcribe the audio verbatim in " + name + ". "
-	}
-	prompt += "Use standard spelling, punctuation, and spaces between words."
+	// Qwen3-ASR uses an empty system context by default. Instruction text here
+	// can be copied into the transcript on non-speech audio.
 	lang, fl := cstring(name)
 	defer fl()
-	p, fp := cstring(prompt)
+	p, fp := cstring("")
 	defer fp()
 	flag := C.asr_cancel_new()
 	if flag == nil {

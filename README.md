@@ -252,3 +252,7 @@ adds `asr_diagnostics`. Older native installations do not export this symbol.
 async recognition of the same PCM fixture. Configure `QWEN_ASR_TEST_MODEL` and
 `QWEN_ASR_TEST_PCM` as for the existing native lifecycle test. It checks EOS and
 output consistency. A passing fixture does not rule out failures on other audio.
+
+### Default recognition context
+
+Recognition uses an empty system context, matching the official Qwen3-ASR default. Language is selected through the language prefix, not natural-language transcription instructions. This avoids injecting instruction text that can be echoed as a transcript on ambiguous audio.
