@@ -52,6 +52,8 @@ struct Model {
     int bits = 4, group = 64;
     bool async_decode = false;
     double decode_seconds = 0;
+ json diagnostics;
+ std::string diagnostics_json;
     mx::Device device{mx::Device::gpu};
     std::string backend, last_language;
     explicit Model(const std::string &path, const std::string &requested, const std::string &mode) {
@@ -313,6 +315,8 @@ struct Model {
     std::string transcribe(const float *audio, int n, const std::string &language,
                            const std::string &prompt, const asr_cancel_flag *cancel) {
         mx::set_default_device(device);
+        decode_seconds = 0;
+        diagnostics = {{"decode_mode",async_decode ? "async" : "sync"},{"audio_samples",n},{"forced_language",language},{"generated_tokens",0},{"input_tokens",0},{"audio_tokens",0},{"last_token_id",nullptr},{"eos_token_id",nullptr},{"max_same_token_run",0},{"repeated_suffix_length",0},{"stop_reason","error"}};
         check_cancel(cancel);
         last_language = language;
         if (n < 400 || n > 16000 * 28)
@@ -332,6 +336,8 @@ struct Model {
              mx::expand_dims(mx::astype(encoded, get("model.embed_tokens.scales").dtype()), 0),
              embed(array(after.data(), {1, int(after.size())}))},
             1);
+        diagnostics["input_tokens"] = x.shape(1);
+        diagnostics["audio_tokens"] = encoded.shape(0);
         std::vector<KV> cache(int(tc.at("num_hidden_layers")));
         std::string text;
         int offset = 0;
@@ -350,6 +356,25 @@ struct Model {
         }
         bool finished = false;
         auto started = std::chrono::steady_clock::now();
+        std::vector<int> generated;
+        int same_run=0, last_token=-1;
+        auto observe = [&](int token) {
+            generated.push_back(token);
+            same_run = token == last_token ? same_run+1 : 1;
+            last_token=token;
+            diagnostics["generated_tokens"]=generated.size();
+            diagnostics["last_token_id"]=token;
+            diagnostics["max_same_token_run"]=std::max(int(diagnostics["max_same_token_run"]),same_run);
+            if (token==151645 || token==151643) {
+                diagnostics["eos_token_id"]=token;
+                diagnostics["stop_reason"]="eos";
+            }
+            for (size_t width=1;width<=16 && width*3<=generated.size();width++) {
+                auto end=generated.end();
+                if (std::equal(end-width,end,end-2*width) && std::equal(end-width,end,end-3*width))
+                    diagnostics["repeated_suffix_length"]=width;
+            }
+        };
         auto append = [&](int token) {
             if (token == 151704)
                 text += "<asr_text>";
@@ -368,6 +393,7 @@ struct Model {
                 auto next = predict(x, offset);
                 mx::eval(next);
                 int token = next.item<int>();
+                observe(token);
                 check_cancel(cancel);
                 if (token == 151645 || token == 151643) {
                     finished = true;
@@ -388,6 +414,7 @@ struct Model {
                     auto next = predict(embed(mx::reshape(pending, {1, 1})), offset);
                     mx::async_eval(next);
                     int token = pending.item<int>();
+                    observe(token);
                     check_cancel(cancel);
                     if (token == 151645 || token == 151643) {
                         finished = true;
@@ -407,8 +434,11 @@ struct Model {
         }
         decode_seconds =
             std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
-        if (!finished)
+        diagnostics["decode_seconds"] = decode_seconds;
+        if (!finished) {
+            diagnostics["stop_reason"]="generation_limit";
             throw std::runtime_error("generation exceeded 512 tokens");
+        }
         auto marker = text.find("<asr_text>");
         if (marker != std::string::npos) {
             if (language.empty() && text.rfind("language ", 0) == 0)
@@ -437,9 +467,16 @@ extern "C" char *asr_transcribe(void *state, const float *audio, int samples, co
             mx::synchronize();
         } catch (...) {
         }
+        auto *model = static_cast<Model *>(state);
+        if (cancel && cancel->canceled.load(std::memory_order_relaxed)) model->diagnostics["stop_reason"]="canceled";
         *error = strdup(e.what());
         return nullptr;
     }
+}
+extern "C" const char *asr_diagnostics(void *state) {
+    auto *model=static_cast<Model *>(state);
+    model->diagnostics_json=model->diagnostics.dump();
+    return model->diagnostics_json.c_str();
 }
 extern "C" void asr_free(void *state) { delete static_cast<Model *>(state); }
 extern "C" void asr_string_free(char *text) { free(text); }

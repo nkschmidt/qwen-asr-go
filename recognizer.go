@@ -38,13 +38,36 @@ type Config struct {
 	Device     Device     // Auto selects the backend enabled by the native build.
 	DecodeMode DecodeMode // Empty selects Async.
 }
+type DecodeDiagnostics struct {
+	DecodeMode           string  `json:"decode_mode"`
+	AudioSamples         int     `json:"audio_samples"`
+	ForcedLanguage       string  `json:"forced_language"`
+	InputTokens          int     `json:"input_tokens"`
+	AudioTokens          int     `json:"audio_tokens"`
+	GeneratedTokens      int     `json:"generated_tokens"`
+	LastTokenID          *int    `json:"last_token_id"`
+	EOSTokenID           *int    `json:"eos_token_id"`
+	MaxSameTokenRun      int     `json:"max_same_token_run"`
+	RepeatedSuffixLength int     `json:"repeated_suffix_length"`
+	StopReason           string  `json:"stop_reason"`
+	DecodeSeconds        float64 `json:"decode_seconds"`
+}
+type DecodeError struct {
+	Cause       error
+	Diagnostics DecodeDiagnostics
+}
+
+func (e *DecodeError) Error() string { return e.Cause.Error() }
+func (e *DecodeError) Unwrap() error { return e.Cause }
+
 type Result struct {
-	Text           string        `json:"text"`
-	Language       string        `json:"language"`
-	Engine         string        `json:"engine"`
-	Device         Device        `json:"device"`
-	ProcessingTime time.Duration `json:"processing_time_ns"`
-	DecodeTime     time.Duration `json:"decode_time_ns"`
+	Diagnostics    DecodeDiagnostics `json:"diagnostics"`
+	Text           string            `json:"text"`
+	Language       string            `json:"language"`
+	Engine         string            `json:"engine"`
+	Device         Device            `json:"device"`
+	ProcessingTime time.Duration     `json:"processing_time_ns"`
+	DecodeTime     time.Duration     `json:"decode_time_ns"`
 }
 type nativeModel interface {
 	recognize(context.Context, []byte, string, string) (Result, error)

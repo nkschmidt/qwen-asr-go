@@ -10,6 +10,7 @@ char *asr_transcribe(void *state, const float *audio, int samples, const char *l
 void asr_free(void *state);
 void asr_string_free(char *text);
 double asr_decode_seconds(void *state);
+const char *asr_diagnostics(void *state);
 const char *asr_device(void *state);
 const char *asr_language(void *state);
 asr_cancel_flag *asr_cancel_new(void);

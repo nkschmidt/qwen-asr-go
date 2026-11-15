@@ -60,3 +60,44 @@ func TestNativeModelLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestNativeSyncAsyncDiagnosticsAndRequestIsolation(t *testing.T) {
+	model, path := os.Getenv("QWEN_ASR_TEST_MODEL"), os.Getenv("QWEN_ASR_TEST_PCM")
+	if model == "" || path == "" {
+		t.Skip("set QWEN_ASR_TEST_MODEL and QWEN_ASR_TEST_PCM")
+	}
+	pcm, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var expected string
+	for _, mode := range []DecodeMode{Sync, Async} {
+		r, err := New(context.Background(), Config{ModelPath: model, Device: Auto, DecodeMode: mode})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for run := 0; run < 4; run++ {
+			result, err := r.Recognize(context.Background(), pcm, "de")
+			if err != nil {
+				r.Close()
+				t.Fatal(mode, err)
+			}
+			d := result.Diagnostics
+			if d.StopReason != "eos" || d.EOSTokenID == nil || (*d.EOSTokenID != 151643 && *d.EOSTokenID != 151645) || d.GeneratedTokens < 1 || d.GeneratedTokens > 512 || d.DecodeMode != string(mode) {
+				r.Close()
+				t.Fatal("invalid decode termination", d)
+			}
+			if expected == "" {
+				expected = result.Text
+			}
+			if result.Text != expected {
+				r.Close()
+				t.Fatalf("mode=%s run=%d got=%q expected=%q", mode, run, result.Text, expected)
+			}
+			t.Logf("mode=%s run=%d elapsed_ms=%d decode_ms=%d tokens=%d eos=%d text=%q", mode, run, result.ProcessingTime.Milliseconds(), result.DecodeTime.Milliseconds(), d.GeneratedTokens, *d.EOSTokenID, result.Text)
+		}
+		if err := r.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

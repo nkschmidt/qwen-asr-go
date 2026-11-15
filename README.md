@@ -231,3 +231,24 @@ go mod edit -replace github.com/nkschmidt/qwen-asr-go=../qwen-asr-go
 MIT. See `LICENSE` and `NOTICE`. Third-party notices are included under
 `licenses/` and `native/vendor/qwen-asr/`. Model weights have their own license
 and are not distributed with this repository.
+
+## Decoder diagnostics
+
+`Result.Diagnostics` contains decoder mode, input/audio/generated token counts,
+forced language, final token/EOS IDs, repeated-token metrics and the stop reason.
+Native decoding errors are wrapped in `*DecodeError`; use `errors.As` to inspect
+its `Diagnostics`. The SDK does not log audio or partial text automatically.
+
+Stop reasons are `eos`, `generation_limit`, `canceled`, or `error`. The 512-token
+limit is unchanged. No automatic retry or promotion of incomplete text is added.
+Repetition metrics are diagnostic signals, not proof that a transcript is invalid.
+The KV cache remains request-local and asynchronous lookahead is drained before
+request resources are released. Per-request timings and diagnostics are reset.
+
+Rebuild/reinstall the native library before using this SDK revision: the C ABI
+adds `asr_diagnostics`. Older native installations do not export this symbol.
+
+`TestNativeSyncAsyncDiagnosticsAndRequestIsolation` compares repeated sync and
+async recognition of the same PCM fixture. Configure `QWEN_ASR_TEST_MODEL` and
+`QWEN_ASR_TEST_PCM` as for the existing native lifecycle test. It checks EOS and
+output consistency. A passing fixture does not rule out failures on other audio.

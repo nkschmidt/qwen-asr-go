@@ -11,7 +11,9 @@ import "C"
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 	"unsafe"
@@ -88,8 +90,18 @@ func (m *mlxModel) recognize(ctx context.Context, pcm []byte, code, name string)
 		}
 		return Result{}, ctx.Err()
 	}
+	var diagnostics DecodeDiagnostics
+	if parseErr := json.Unmarshal([]byte(C.GoString(C.asr_diagnostics(m.state))), &diagnostics); parseErr != nil {
+		if text != nil {
+			C.asr_string_free(text)
+		}
+		if err != nil {
+			C.asr_string_free(err)
+		}
+		return Result{}, fmt.Errorf("decode diagnostics: %w", parseErr)
+	}
 	if text == nil {
-		return Result{}, nativeError(err)
+		return Result{}, &DecodeError{Cause: nativeError(err), Diagnostics: diagnostics}
 	}
 	defer C.asr_string_free(text)
 	if code == "" {
@@ -102,6 +114,6 @@ func (m *mlxModel) recognize(ctx context.Context, pcm []byte, code, name string)
 			}
 		}
 	}
-	return Result{Text: strings.TrimSpace(C.GoString(text)), Language: code, Engine: "qwen3-asr-0.6b-mlx-4bit", Device: Device(C.GoString(C.asr_device(m.state))), ProcessingTime: elapsed, DecodeTime: time.Duration(float64(C.asr_decode_seconds(m.state)) * float64(time.Second))}, nil
+	return Result{Diagnostics: diagnostics, Text: strings.TrimSpace(C.GoString(text)), Language: code, Engine: "qwen3-asr-0.6b-mlx-4bit", Device: Device(C.GoString(C.asr_device(m.state))), ProcessingTime: elapsed, DecodeTime: time.Duration(float64(C.asr_decode_seconds(m.state)) * float64(time.Second))}, nil
 }
 func (m *mlxModel) close() { C.asr_free(m.state); m.state = nil }
