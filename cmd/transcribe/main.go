@@ -49,6 +49,7 @@ func run() error {
 	lang := flag.String("language", "auto", "language code or auto")
 	device := flag.String("device", "auto", "auto, metal, cuda or cpu")
 	decode := flag.String("decode", "async", "async or sync")
+	prompt := flag.String("context", "", "optional vocabulary or conversational context (4096 bytes max)")
 	flag.Parse()
 	if *model == "" || *wav == "" {
 		flag.Usage()
@@ -65,7 +66,7 @@ func run() error {
 		return err
 	}
 	defer recognizer.Close()
-	result, err := recognizer.Recognize(ctx, pcm, *lang)
+	result, err := recognizer.RecognizeWithContext(ctx, pcm, *lang, *prompt)
 	if err != nil {
 		return err
 	}

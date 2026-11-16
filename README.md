@@ -42,7 +42,7 @@ The native inference runtime does not use its Python bindings.
 Install the Go module in your application:
 
 ```sh
-go get github.com/nkschmidt/qwen-asr-go@v0.1.2
+go get github.com/nkschmidt/qwen-asr-go@v0.1.4
 ```
 
 `go get` downloads Go source. It does **not** install MLX or build the native
@@ -96,6 +96,20 @@ result, err := recognizer.Recognize(ctx, pcm16, "de")
 28 seconds. Inputs shorter than one second are zero-padded. Supply an ISO
 language code such as `de`, `ru`, or `en`; use `auto` or an empty string for
 automatic language detection. Supported codes are listed in `languages.go`.
+
+Optional per-request vocabulary/context is available without changing the model instance:
+
+```go
+result, err := recognizer.RecognizeWithContext(ctx, pcm16, "de",
+    "Vocabulary: Standardzimmer, Familienzimmer.")
+```
+
+Empty context is identical to `Recognize`. Context is limited to 4096 UTF-8 bytes;
+NUL and special-token delimiters are rejected. It is not retained for later calls.
+Prefer short vocabulary lists: full dialogue instructions can be echoed into the
+transcription, especially with short/noisy audio. Context biases decoding; it does
+not guarantee a match and should be validated with representative recordings.
+Keep warmup requests context-free. The CLI also accepts `-context`.
 
 `Result` includes the text, language code, model identifier, selected device,
 total processing time, and decoding time after prefill.

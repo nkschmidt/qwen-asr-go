@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 type Device string
@@ -70,7 +71,7 @@ type Result struct {
 	DecodeTime     time.Duration     `json:"decode_time_ns"`
 }
 type nativeModel interface {
-	recognize(context.Context, []byte, string, string) (Result, error)
+	recognize(context.Context, []byte, string, string, string) (Result, error)
 	close()
 }
 type response struct {
@@ -81,6 +82,7 @@ type request struct {
 	ctx            context.Context
 	pcm            []byte
 	language, name string
+	prompt         string
 	reply          chan response
 }
 
@@ -167,7 +169,7 @@ func (r *Recognizer) run(cfg Config, load func(Config) (nativeModel, error), rea
 			nativeMu.Lock()
 			var result Result
 			if err = callCtx.Err(); err == nil {
-				result, err = model.recognize(callCtx, req.pcm, req.language, req.name)
+				result, err = model.recognize(callCtx, req.pcm, req.language, req.name, req.prompt)
 			}
 			nativeMu.Unlock()
 			stop()
@@ -185,6 +187,17 @@ func (r *Recognizer) run(cfg Config, load func(Config) (nativeModel, error), rea
 // (de, ru, en, ...) or auto/empty. Context cancellation is cooperative between
 // native stages/tokens; a running GPU kernel is not preempted.
 func (r *Recognizer) Recognize(ctx context.Context, pcm []byte, language string) (Result, error) {
+	return r.RecognizeWithContext(ctx, pcm, language, "")
+}
+
+// RecognizeWithContext supplies request-local vocabulary or conversational context.
+// It biases recognition, not a guaranteed answer. Empty context preserves Recognize.
+// Context is limited to 4096 UTF-8 bytes; native special-token delimiters and NUL
+// are rejected. It is never retained for another request or model warmup.
+func (r *Recognizer) RecognizeWithContext(ctx context.Context, pcm []byte, language, prompt string) (Result, error) {
+	if len(prompt) > 4096 || !utf8.ValidString(prompt) || strings.ContainsAny(prompt, "\x00") || strings.Contains(prompt, "<|") || strings.Contains(prompt, "|>") {
+		return Result{}, errors.New("context must be valid UTF-8, at most 4096 bytes, without NUL or special-token delimiters")
+	}
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
@@ -206,7 +219,7 @@ func (r *Recognizer) Recognize(ctx context.Context, pcm []byte, language string)
 			return Result{}, fmt.Errorf("unsupported language %q", language)
 		}
 	}
-	req := request{ctx: ctx, pcm: append([]byte(nil), pcm...), language: code, name: name, reply: make(chan response, 1)}
+	req := request{ctx: ctx, pcm: append([]byte(nil), pcm...), language: code, name: name, prompt: prompt, reply: make(chan response, 1)}
 	select {
 	case <-ctx.Done():
 		return Result{}, ctx.Err()

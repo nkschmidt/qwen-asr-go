@@ -46,7 +46,7 @@ func loadNative(cfg Config) (nativeModel, error) {
 	}
 	return &mlxModel{state: state}, nil
 }
-func (m *mlxModel) recognize(ctx context.Context, pcm []byte, code, name string) (Result, error) {
+func (m *mlxModel) recognize(ctx context.Context, pcm []byte, code, name, prompt string) (Result, error) {
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
@@ -58,11 +58,10 @@ func (m *mlxModel) recognize(ctx context.Context, pcm []byte, code, name string)
 	for i := 0; i < len(pcm)/2; i++ {
 		audio[i] = float32(int16(binary.LittleEndian.Uint16(pcm[2*i:]))) / 32768
 	}
-	// Qwen3-ASR uses an empty system context by default. Instruction text here
-	// can be copied into the transcript on non-speech audio.
+	// The caller supplies request-local context; keep it empty for warmup/silence.
 	lang, fl := cstring(name)
 	defer fl()
-	p, fp := cstring("")
+	p, fp := cstring(prompt)
 	defer fp()
 	flag := C.asr_cancel_new()
 	if flag == nil {

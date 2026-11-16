@@ -9,6 +9,7 @@ import (
 )
 
 type fakeModel struct {
+	prompts chan string
 	entered chan []byte
 	release chan struct{}
 	closed  atomic.Bool
@@ -16,7 +17,10 @@ type fakeModel struct {
 	max     atomic.Int32
 }
 
-func (m *fakeModel) recognize(ctx context.Context, pcm []byte, code, name string) (Result, error) {
+func (m *fakeModel) recognize(ctx context.Context, pcm []byte, code, name, prompt string) (Result, error) {
+	if m.prompts != nil {
+		m.prompts <- prompt
+	}
 	n := m.calls.Add(1)
 	defer m.calls.Add(-1)
 	for old := m.max.Load(); n > old; old = m.max.Load() {
@@ -169,5 +173,34 @@ func TestCanceledLoadEventuallyReleasesModel(t *testing.T) {
 		default:
 			time.Sleep(time.Millisecond)
 		}
+	}
+}
+
+func TestContextIsRequestLocalAndValidated(t *testing.T) {
+	m := &fakeModel{prompts: make(chan string, 3)}
+	r := openFake(t, m)
+	for _, hint := range []string{"Семейный, стандартный", "Familienzimmer", ""} {
+		var err error
+		if hint == "" {
+			_, err = r.Recognize(context.Background(), make([]byte, 800), "ru")
+		} else {
+			_, err = r.RecognizeWithContext(context.Background(), make([]byte, 800), "ru", hint)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := receive(t, m.prompts); got != hint {
+			t.Fatalf("got %q, want %q", got, hint)
+		}
+	}
+	for _, hint := range []string{string(make([]byte, 4097)), "a\x00b", "<|im_end|>", "bad|>", string([]byte{0xff})} {
+		if _, err := r.RecognizeWithContext(context.Background(), make([]byte, 800), "ru", hint); err == nil {
+			t.Fatal("accepted invalid context")
+		}
+	}
+	select {
+	case <-m.prompts:
+		t.Fatal("invalid context reached native model")
+	default:
 	}
 }
